@@ -9,7 +9,7 @@ import { connectMongo } from "@/lib/mongodb";
 import { activateVerifiedAccount } from "./account.service";
 import { authorizeAdmin, authorizeCustomer, createTransfer, setTransactionPin } from "./transfer.service";
 import { register, verifyEmail } from "./auth.service";
-import { sendPendingFollowups } from "./transaction.service";
+import { processCompletedTransferNotifications, sendPendingFollowups } from "./transaction.service";
 
 describe.runIf(process.env.RUN_MONGO_INTEGRATION === "1")("banking transactions against MongoDB", () => {
   let database: MongoMemoryReplSet;
@@ -23,7 +23,7 @@ describe.runIf(process.env.RUN_MONGO_INTEGRATION === "1")("banking transactions 
 
   it("creates zero-balance accounts and verifies an emailed one-time code without storing it", async () => {
     const sent: { text?: string }[] = [];
-    process.env.SMTP_HOST = "127.0.0.1"; process.env.SMTP_PORT = "2525"; process.env.EMAIL_FROM = "test@example.test";
+    process.env.SMTP_HOST = "127.0.0.1"; process.env.SMTP_PORT = "2525"; process.env.EMAIL_FROM = "test@example.test"; process.env.APP_URL = "http://localhost:3000";
     vi.spyOn(nodemailer, "createTransport").mockReturnValue({ sendMail: async (message: { text?: string }) => { sent.push(message); } } as never);
     const email = `registration-${Date.now()}@example.test`;
     await register({ surname: "Test", firstName: "New", email, password: "long-test-password", country: "Nigeria", homeAddress: "1 Course Street", phoneNumber: "+2348000000000" }, "fr");
@@ -33,7 +33,7 @@ describe.runIf(process.env.RUN_MONGO_INTEGRATION === "1")("banking transactions 
     const accounts = await Account.find({ userId: user._id });
     expect(accounts).toHaveLength(2);
     expect(accounts.every(account => account.availableBalance === 0 && account.status === "PENDING_VERIFICATION")).toBe(true);
-    const code = sent[0].text?.match(/verification code is (\d{6})/)?.[1];
+    const code = sent[0].text?.match(/application: (\d{6})/)?.[1];
     expect(code).toMatch(/^\d{6}$/);
     const challenge = await EmailVerificationChallenge.findOne({ userId: user._id });
     expect(await bcrypt.compare(code!, challenge.codeHash)).toBe(true);
@@ -41,8 +41,37 @@ describe.runIf(process.env.RUN_MONGO_INTEGRATION === "1")("banking transactions 
     await verifyEmail(email, code!);
     expect((await User.findById(user._id)).emailVerified).toBe(true);
     expect(await EmailVerificationChallenge.countDocuments({ userId: user._id, usedAt: null })).toBe(0);
+    expect(await Notification.countDocuments({ userId: user._id, type: "VERIFICATION_SUCCESS" })).toBe(1);
+    expect(sent.some(mail => mail.text?.includes("Your email address has been successfully verified."))).toBe(true);
+    expect(await verifyEmail(email, code!)).toBe(false);
+    expect(await Notification.countDocuments({ userId: user._id, type: "VERIFICATION_SUCCESS" })).toBe(1);
     vi.restoreAllMocks();
-    delete process.env.SMTP_HOST; delete process.env.SMTP_PORT; delete process.env.EMAIL_FROM;
+    delete process.env.SMTP_HOST; delete process.env.SMTP_PORT; delete process.env.EMAIL_FROM; delete process.env.APP_URL;
+  }, 180_000);
+
+  it("accepts a verification link once and never stores its token in an email job", async () => {
+    process.env.SMTP_HOST = "127.0.0.1"; process.env.SMTP_PORT = "2525"; process.env.EMAIL_FROM = "test@example.test"; process.env.APP_URL = "http://localhost:3000";
+    const sent: { text?: string }[] = [];
+    vi.spyOn(nodemailer, "createTransport").mockReturnValue({ sendMail: async (message: { text?: string }) => { sent.push(message); } } as never);
+    const email = `link-${Date.now()}@example.test`;
+    await register({ surname: "Test", firstName: "Link", email, password: "long-test-password", country: "Nigeria", homeAddress: "1 Course Street", phoneNumber: "+2348000000000" });
+    const match = sent[0].text?.match(/http:\/\/localhost:3000\/verify-email\?[^\s]+/);
+    expect(match).toBeTruthy();
+    const token = new URL(match![0]).searchParams.get("token")!;
+    expect(token).toMatch(/^[a-f0-9]{64}$/);
+    const user = await User.findOne({ email });
+    const challenge = await EmailVerificationChallenge.findOne({ userId: user._id });
+    expect(await bcrypt.compare(token, challenge.tokenHash)).toBe(true);
+    expect((await EmailJob.findOne({ to: email })).text).not.toContain(token);
+    await EmailVerificationChallenge.updateOne({ _id: challenge._id }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    await expect(verifyEmail(email, token)).rejects.toThrow(/expired/i);
+    expect((await User.findById(user._id)).emailVerified).toBe(false);
+    await EmailVerificationChallenge.updateOne({ _id: challenge._id }, { $set: { expiresAt: new Date(Date.now() + 60_000) } });
+    expect(await verifyEmail(email, token)).toBe(true);
+    expect(await verifyEmail(email, token)).toBe(false);
+    expect(await Notification.countDocuments({ userId: user._id, type: "VERIFICATION_SUCCESS" })).toBe(1);
+    vi.restoreAllMocks();
+    delete process.env.SMTP_HOST; delete process.env.SMTP_PORT; delete process.env.EMAIL_FROM; delete process.env.APP_URL;
   }, 180_000);
 
   it("credits once and debits once after admin authorization", async () => {
@@ -81,6 +110,13 @@ describe.runIf(process.env.RUN_MONGO_INTEGRATION === "1")("banking transactions 
     expect(await sendPendingFollowups()).toBe(0);
     expect(await Message.countDocuments({ userId: user._id, type: "PENDING_FOLLOWUP" })).toBe(1);
     expect((await Transaction.findById(transaction._id)).status).toBe("PENDING");
+    expect(await processCompletedTransferNotifications()).toBe(0);
+    await Transaction.updateOne({ _id: transaction._id, status: "PENDING" }, { $set: { status: "COMPLETED", completedAt: new Date() } });
+    expect(await processCompletedTransferNotifications()).toBe(1);
+    expect(await processCompletedTransferNotifications()).toBe(0);
+    expect(await Notification.countDocuments({ userId: user._id, type: "TRANSFER_SUCCESS" })).toBe(1);
+    expect(await EmailJob.countDocuments({ userId: user._id, subject: { $regex: /^Transfer Successful/ } })).toBe(1);
+    expect(adminMail.some(mail => mail.text?.includes(`Transaction Reference: ${transaction.reference}`))).toBe(true);
     vi.restoreAllMocks();
     delete process.env.SMTP_HOST; delete process.env.SMTP_PORT; delete process.env.EMAIL_FROM; delete process.env.ADMIN_APPROVAL_EMAIL;
   }, 180_000);

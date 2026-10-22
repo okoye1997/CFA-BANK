@@ -1,4 +1,11 @@
+import { getLocale, getTranslations } from "next-intl/server";
 import { currentUser } from "@/lib/auth";
 import { Account } from "@/lib/models";
 import { AccountCards } from "@/components/account-cards";
-export default async function AccountsPage(){const user=await currentUser();const accounts=await Account.find({userId:user._id}).lean();return <><span className="eyebrow">Accounts</span><h1 className="text-3xl font-bold mt-1 mb-8">Your accounts</h1><AccountCards accounts={accounts.map(a=>({_id:String(a._id),name:a.name,currency:a.currency,availableBalance:a.availableBalance,ledgerBalance:a.ledgerBalance,status:a.status}))}/></>}
+
+export default async function AccountsPage() {
+  const user = await currentUser();
+  const [accounts, locale, navigation, t, state] = await Promise.all([Account.find({ userId: user._id }).lean(), getLocale(), getTranslations("navigation"), getTranslations("accounts"), getTranslations("status")]);
+  const labels = { title: t("title"), hide: t("hide"), show: t("show"), balances: t("balances"), available: t("available"), ledger: t("ledger"), cash: t("cash"), gold: t("gold") };
+  return <><span className="eyebrow">{navigation("accounts")}</span><h1 className="text-3xl font-bold mt-1 mb-8">{t("title")}</h1><AccountCards locale={locale} labels={labels} statusLabels={{ ACTIVE: state("ACTIVE"), PENDING_VERIFICATION: state("PENDING_VERIFICATION"), SUSPENDED: state("SUSPENDED") }} accounts={accounts.map(account => ({ _id: String(account._id), name: account.name, currency: account.currency, availableBalance: account.availableBalance, ledgerBalance: account.ledgerBalance, status: account.status }))}/></>;
+}

@@ -1,17 +1,18 @@
 import { EmailJob, Message, Notification, User } from "@/lib/models";
 import { renderEmail } from "@/lib/email/templates";
+import { applicationName } from "@/lib/app-config";
 import { deliverEmailJob } from "@/lib/email/send-email";
 import type { ClientSession } from "mongoose";
-type Notice = { userId: string; type: string; subject: string; body: string; href?: string; email?: boolean; emailSubject?: string; details?: Record<string, string> };
-export async function queueNotification({ userId, type, subject, body, href, email = true, emailSubject, details }: Notice, session?: ClientSession) {
+type Notice = { userId: string; type: string; subject: string; body: string; href?: string; email?: boolean; emailSubject?: string; emailBody?: string; eventKey?: string; details?: Record<string, string> };
+export async function queueNotification({ userId, type, subject, body, href, email = true, emailSubject, emailBody, eventKey, details }: Notice, session?: ClientSession) {
   const options = session ? { session, ordered: true } : { ordered: true };
   const [message] = await Message.create([{ userId, type, subject, body, details }], options);
-  await Notification.create([{ userId, type, title: subject, href }], options);
+  await Notification.create([{ userId, type, title: subject, href, eventKey }], options);
   let jobId: string | undefined;
   if (email) {
     const user = await User.findById(userId).select("email firstName").session(session || null);
     if (user) {
-      const rendered = renderEmail({ title: emailSubject || subject, customerName: user.firstName, content: body, action: href ? { label: "View in CAF Bank", href: `${process.env.APP_URL || "http://localhost:3000"}${href}` } : undefined });
+      const rendered = renderEmail({ title: emailSubject || subject, customerName: user.firstName, content: emailBody || body, action: href && process.env.APP_URL ? { label: `View in ${applicationName}`, href: new URL(href, process.env.APP_URL).toString() } : undefined });
       const [job] = await EmailJob.create([{ userId, to: user.email, subject: emailSubject || subject, ...rendered }], options);
       jobId = String(job._id);
     }

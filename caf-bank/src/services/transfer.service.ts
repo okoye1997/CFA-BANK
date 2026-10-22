@@ -26,7 +26,7 @@ export async function createTransfer(userId: string, input: unknown) {
   if (account.availableBalance < amount) throw new AppError("Insufficient available balance.", 422);
   const beneficiary = await Beneficiary.findOne({ _id: data.beneficiaryId, userId });
   if (!beneficiary) throw new AppError("Select your beneficiary.", 403);
-  const transaction = await Transaction.create({ userId, accountId: account._id, beneficiaryId: beneficiary._id, amount, currency: "USD", reference: `CAF-${randomUUID().slice(0, 12).toUpperCase()}`, description: data.description, status: "AWAITING_TRANSACTION_PIN" });
+  const transaction = await Transaction.create({ userId, accountId: account._id, beneficiaryId: beneficiary._id, recipientName: beneficiary.name, recipientBankName: beneficiary.bankName, amount, currency: "USD", reference: `CAF-${randomUUID().slice(0, 12).toUpperCase()}`, description: data.description, status: "AWAITING_TRANSACTION_PIN" });
   await audit("TRANSACTION_CREATION", userId, String(transaction._id));
   return transaction;
 }

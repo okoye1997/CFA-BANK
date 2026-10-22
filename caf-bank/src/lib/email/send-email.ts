@@ -14,11 +14,11 @@ export async function deliverEmailJob(jobId: string) {
     job.status = "FAILED"; job.error = "SMTP delivery failed"; job.attemptCount++; await job.save();
   }
 }
-export async function sendSecretCodeEmail({ to, subject, customerName, message, safeMessage }: { to: string; subject: string; customerName: string; message: string; safeMessage: string }) {
+export async function sendSecretCodeEmail({ to, subject, customerName, message, safeMessage, action }: { to: string; subject: string; customerName: string; message: string; safeMessage: string; action?: { label: string; href: string } }) {
   const transport = mailTransporter();
   if (!transport) throw new AppError("Email delivery is not configured.", 503);
   const safe = renderEmail({ title: subject, customerName, content: safeMessage });
-  const actual = renderEmail({ title: subject, customerName, content: message });
+  const actual = renderEmail({ title: subject, customerName, content: message, action });
   try {
     await transport.sendMail({ from: process.env.EMAIL_FROM, to, subject, ...actual });
   } catch {

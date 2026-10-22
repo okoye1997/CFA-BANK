@@ -9,10 +9,10 @@ const accountSchema = new Schema({ userId: ref, name: { type: String, enum: ["Ca
 accountSchema.index({ userId: 1, name: 1 }, { unique: true });
 export const Account = named("Account", accountSchema);
 export const Verification = named("Verification", new Schema({ userId: ref, documentType: String, documentPath: String, claimedName: String, status: { type: String, enum: ["PENDING", "APPROVED", "REVIEW_REQUIRED", "REJECTED"] }, reason: String }, base));
-const challenge = (idField: string) => { const schema = new Schema({ [idField]: ref, codeHash: { type: String, required: true }, expiresAt: Date, attemptCount: { type: Number, default: 0 }, usedAt: Date }, base); schema.index({ [idField]: 1, createdAt: -1 }); return schema; };
+const challenge = (idField: string) => { const schema = new Schema({ [idField]: ref, codeHash: { type: String, required: true }, tokenHash: String, expiresAt: Date, attemptCount: { type: Number, default: 0 }, usedAt: Date }, base); schema.index({ [idField]: 1, createdAt: -1 }); return schema; };
 export const EmailVerificationChallenge = named("EmailVerificationChallenge", challenge("userId"));
 export const AdminTransactionChallenge = named("AdminTransactionChallenge", challenge("transactionId"));
-const transactionSchema = new Schema({ userId: ref, accountId: ref, beneficiaryId: ref, amount: Number, currency: String, reference: { type: String, unique: true }, description: String, status: { type: String, enum: ["DRAFT", "AWAITING_TRANSACTION_PIN", "AWAITING_ADMIN_AUTHORIZATION", "AUTHORIZED", "PENDING", "COMPLETED", "FAILED", "CANCELLED"], default: "AWAITING_TRANSACTION_PIN" }, pendingAt: Date, pendingFollowupAt: Date }, base);
+const transactionSchema = new Schema({ userId: ref, accountId: ref, beneficiaryId: ref, recipientName: String, recipientBankName: String, amount: Number, currency: String, reference: { type: String, unique: true }, description: String, status: { type: String, enum: ["DRAFT", "AWAITING_TRANSACTION_PIN", "AWAITING_ADMIN_AUTHORIZATION", "AUTHORIZED", "PENDING", "COMPLETED", "FAILED", "CANCELLED"], default: "AWAITING_TRANSACTION_PIN" }, pendingAt: Date, pendingFollowupAt: Date, completedAt: Date, completionNotifiedAt: Date }, base);
 transactionSchema.index({ userId: 1, createdAt: -1 });
 transactionSchema.index({ status: 1, pendingAt: 1 });
 export const Transaction = named("Transaction", transactionSchema);
@@ -22,7 +22,7 @@ export const Beneficiary = named("Beneficiary", new Schema({ userId: ref, name: 
 const messageSchema = new Schema({ userId: ref, type: String, subject: String, body: String, details: Schema.Types.Mixed, readAt: Date, archivedAt: Date }, base);
 messageSchema.index({ userId: 1, createdAt: -1 });
 export const Message = named("Message", messageSchema);
-const notificationSchema = new Schema({ userId: ref, type: String, title: String, href: String, readAt: Date }, base);
+const notificationSchema = new Schema({ userId: ref, type: String, title: String, href: String, eventKey: { type: String, unique: true, sparse: true }, readAt: Date }, base);
 notificationSchema.index({ userId: 1, createdAt: -1 });
 export const Notification = named("Notification", notificationSchema);
 export const EmailJob = named("EmailJob", new Schema({ userId: Schema.Types.ObjectId, to: String, subject: String, html: String, text: String, status: { type: String, enum: ["QUEUED", "SENT", "FAILED"], default: "QUEUED" }, attemptCount: { type: Number, default: 0 }, error: String, sentAt: Date }, base));

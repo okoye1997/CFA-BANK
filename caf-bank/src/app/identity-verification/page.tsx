@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { LanguageSelector } from "@/components/language-selector";
 
 export default function IdentityPage() {
-  const router = useRouter(); const t = useTranslations("identity");
+  const router = useRouter(); const t = useTranslations("identity"); const common = useTranslations("common");
   const [documentType, setDocumentType] = useState("Passport");
   const [claimedName, setClaimedName] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -27,9 +27,9 @@ export default function IdentityPage() {
     request.upload.onprogress = event => { if (event.lengthComputable) setProgress(Math.round(event.loaded * 100 / event.total)); };
     request.onload = () => {
       setBusy(false);
-      const data = JSON.parse(request.responseText || "{}");
-      if (request.status < 200 || request.status >= 300) { setError(data.error || t("failed")); return; }
-      setStatus(data.status);
+      let data: { status?: string }; try { data = JSON.parse(request.responseText || "{}"); } catch { data = {}; }
+      if (request.status < 200 || request.status >= 300) { setError(common("requestFailed")); return; }
+      if (data.status) setStatus(data.status);
       if (data.status === "APPROVED") router.push("/dashboard");
     };
     request.onerror = () => { setBusy(false); setError(t("failed")); };

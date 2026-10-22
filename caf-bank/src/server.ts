@@ -3,8 +3,8 @@ import next from "next";
 import { Server } from "socket.io";
 import { getToken } from "next-auth/jwt";
 import type { NextApiRequest } from "next";
-import { connectMongo } from "./src/lib/mongodb";
-import { SupportConversation, User } from "./src/lib/models";
+import { connectMongo } from "./lib/mongodb";
+import { SupportConversation, User } from "./lib/models";
 
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
