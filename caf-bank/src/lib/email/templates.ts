@@ -1,0 +1,10 @@
+function escape(value: string) { return value.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!); }
+export function renderEmail({ title, customerName, content, action }: { title: string; customerName: string; content: string; action?: { label: string; href: string } }) {
+  const safeTitle = escape(title), safeName = escape(customerName), safeContent = escape(content);
+  const href = action?.href?.startsWith("https://") ? action.href : undefined;
+  const logoUrl = process.env.APP_URL?.startsWith("https://") ? `${process.env.APP_URL}/branding/logo.png` : undefined;
+  return {
+    html: `<div style="background:#eef4ff;padding:32px;font-family:Arial,sans-serif;color:#17335a"><div style="max-width:560px;margin:auto;background:#fff;border-radius:16px;overflow:hidden"><div style="background:#0a3f92;color:#fff;padding:24px;font-weight:bold;font-size:22px">${logoUrl ? `<img src="${escape(logoUrl)}" width="32" height="32" alt="CAF Bank logo" style="vertical-align:middle;margin-right:10px;border-radius:7px">` : "◈ "}CAF BANK</div><div style="padding:32px"><h1 style="font-size:24px">${safeTitle}</h1><p>Hello ${safeName},</p><p style="line-height:1.6">${safeContent.replace(/\n/g, "<br>")}</p>${href ? `<p><a href="${escape(href)}" style="background:#0a63ce;color:white;padding:12px 20px;border-radius:8px;text-decoration:none">${escape(action!.label)}</a></p>` : ""}<p>Need help? Visit your secure account support center.</p><p style="font-size:12px;color:#62748d">For your security, CAF Bank will never ask for your password or transaction PIN by email.</p></div><div style="background:#f4f7fc;padding:18px 32px;font-size:12px">CAF Bank • Banking simulation</div></div></div>`,
+    text: `CAF BANK\n${title}\n\nHello ${customerName},\n\n${content}\n\n${action ? `${action.label}: ${href ?? ""}\n\n` : ""}Need help? Visit your secure account support center.\nFor your security, CAF Bank will never ask for your password or transaction PIN by email.\nCAF Bank • Banking simulation`,
+  };
+}

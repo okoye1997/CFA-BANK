@@ -1,0 +1,87 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { randomInt } from "node:crypto";
+import mongoose from "mongoose";
+import bcrypt from "bcryptjs";
+import nodemailer from "nodemailer";
+import { MongoMemoryReplSet } from "mongodb-memory-server";
+import { Account, AdminTransactionChallenge, Beneficiary, EmailJob, EmailVerificationChallenge, LedgerEntry, Message, Notification, Transaction, TransactionAuthorization, User } from "@/lib/models";
+import { connectMongo } from "@/lib/mongodb";
+import { activateVerifiedAccount } from "./account.service";
+import { authorizeAdmin, authorizeCustomer, createTransfer, setTransactionPin } from "./transfer.service";
+import { register, verifyEmail } from "./auth.service";
+import { sendPendingFollowups } from "./transaction.service";
+
+describe.runIf(process.env.RUN_MONGO_INTEGRATION === "1")("banking transactions against MongoDB", () => {
+  let database: MongoMemoryReplSet;
+  beforeAll(async () => {
+    database = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: "wiredTiger" }, instanceOpts: [{ launchTimeout: 60_000 }] });
+    process.env.MONGODB_URI = database.getUri("caf_bank_test");
+    await connectMongo();
+    await Promise.all([User.init(), Account.init(), LedgerEntry.init(), Transaction.init(), TransactionAuthorization.init(), AdminTransactionChallenge.init()]);
+  }, 180_000);
+  afterAll(async () => { vi.restoreAllMocks(); await mongoose.disconnect(); if (database) await database.stop(); });
+
+  it("creates zero-balance accounts and verifies an emailed one-time code without storing it", async () => {
+    const sent: { text?: string }[] = [];
+    process.env.SMTP_HOST = "127.0.0.1"; process.env.SMTP_PORT = "2525"; process.env.EMAIL_FROM = "test@example.test";
+    vi.spyOn(nodemailer, "createTransport").mockReturnValue({ sendMail: async (message: { text?: string }) => { sent.push(message); } } as never);
+    const email = `registration-${Date.now()}@example.test`;
+    await register({ surname: "Test", firstName: "New", email, password: "long-test-password", country: "Nigeria", homeAddress: "1 Course Street", phoneNumber: "+2348000000000" }, "fr");
+    const user = await User.findOne({ email });
+    expect(user.emailVerified).toBe(false);
+    expect(user.preferredLocale).toBe("fr");
+    const accounts = await Account.find({ userId: user._id });
+    expect(accounts).toHaveLength(2);
+    expect(accounts.every(account => account.availableBalance === 0 && account.status === "PENDING_VERIFICATION")).toBe(true);
+    const code = sent[0].text?.match(/verification code is (\d{6})/)?.[1];
+    expect(code).toMatch(/^\d{6}$/);
+    const challenge = await EmailVerificationChallenge.findOne({ userId: user._id });
+    expect(await bcrypt.compare(code!, challenge.codeHash)).toBe(true);
+    expect((await EmailJob.findOne({ to: email })).text).not.toContain(code);
+    await verifyEmail(email, code!);
+    expect((await User.findById(user._id)).emailVerified).toBe(true);
+    expect(await EmailVerificationChallenge.countDocuments({ userId: user._id, usedAt: null })).toBe(0);
+    vi.restoreAllMocks();
+    delete process.env.SMTP_HOST; delete process.env.SMTP_PORT; delete process.env.EMAIL_FROM;
+  }, 180_000);
+
+  it("credits once and debits once after admin authorization", async () => {
+    const user = await User.create({ surname: "Test", firstName: "Customer", email: `customer-${Date.now()}@example.test`, passwordHash: "not-a-login", emailVerified: true, identityVerified: true, verificationStatus: "APPROVED" });
+    const admin = await User.create({ surname: "Admin", firstName: "Test", email: `admin-${Date.now()}@example.test`, passwordHash: "not-a-login", role: "ADMIN", emailVerified: true, identityVerified: true });
+    const [cash] = await Account.create([{ userId: user._id, name: "Cash Account", currency: "USD" }, { userId: user._id, name: "Gold Account", currency: "GBP" }]);
+    expect(await activateVerifiedAccount(String(user._id))).toBe(true);
+    expect(await activateVerifiedAccount(String(user._id))).toBe(false);
+    expect((await Account.findById(cash._id)).availableBalance).toBe(1_000_000_000);
+    expect(await LedgerEntry.countDocuments({ operationKey: `ACCOUNT_ACTIVATION_CREDIT:${user._id}` })).toBe(1);
+    expect(await Message.countDocuments({ userId: user._id, type: "CREDIT" })).toBe(1);
+    const beneficiary = await Beneficiary.create({ userId: user._id, name: "Recipient", bankName: "Simulation", accountIdentifier: "SIM-001", currency: "USD" });
+    const transaction = await createTransfer(String(user._id), { accountId: String(cash._id), beneficiaryId: String(beneficiary._id), amount: "300000.00", description: "Course transfer" });
+    expect(transaction.status).toBe("AWAITING_TRANSACTION_PIN");
+    expect((await Account.findById(cash._id)).availableBalance).toBe(1_000_000_000);
+    const adminMail: { text?: string }[] = [];
+    process.env.SMTP_HOST = "127.0.0.1"; process.env.SMTP_PORT = "2525"; process.env.EMAIL_FROM = "test@example.test"; process.env.ADMIN_APPROVAL_EMAIL = "admin-channel@example.test";
+    vi.spyOn(nodemailer, "createTransport").mockReturnValue({ sendMail: async (message: { text?: string }) => { adminMail.push(message); } } as never);
+    const pin = randomInt(0, 1_000_000).toString().padStart(6, "0");
+    await setTransactionPin(String(user._id), pin);
+    expect((await authorizeCustomer(String(user._id), String(transaction._id), pin)).status).toBe("AWAITING_ADMIN_AUTHORIZATION");
+    expect((await Account.findById(cash._id)).availableBalance).toBe(1_000_000_000);
+    const code = adminMail[0].text?.match(/single-use code is (\d{6})/)?.[1];
+    expect(code).toMatch(/^\d{6}$/);
+    const challenge = await AdminTransactionChallenge.findOne({ transactionId: transaction._id });
+    expect(await bcrypt.compare(code!, challenge.codeHash)).toBe(true);
+    expect((await EmailJob.findOne({ to: "admin-channel@example.test" })).text).not.toContain(code);
+    expect((await authorizeAdmin(String(admin._id), String(transaction._id), code!)).status).toBe("PENDING");
+    await expect(authorizeAdmin(String(admin._id), String(transaction._id), code!)).rejects.toThrow();
+    expect((await Account.findById(cash._id)).availableBalance).toBe(970_000_000);
+    expect(await LedgerEntry.countDocuments({ operationKey: `TRANSFER_DEBIT:${transaction._id}` })).toBe(1);
+    expect(await Notification.countDocuments({ userId: user._id })).toBe(2);
+    expect(await EmailJob.countDocuments({ userId: user._id })).toBe(2);
+    await Transaction.updateOne({ _id: transaction._id }, { $set: { pendingAt: new Date(Date.now() - 25 * 60 * 60_000) } });
+    expect(await sendPendingFollowups()).toBe(1);
+    expect(await sendPendingFollowups()).toBe(0);
+    expect(await Message.countDocuments({ userId: user._id, type: "PENDING_FOLLOWUP" })).toBe(1);
+    expect((await Transaction.findById(transaction._id)).status).toBe("PENDING");
+    vi.restoreAllMocks();
+    delete process.env.SMTP_HOST; delete process.env.SMTP_PORT; delete process.env.EMAIL_FROM; delete process.env.ADMIN_APPROVAL_EMAIL;
+  }, 180_000);
+});

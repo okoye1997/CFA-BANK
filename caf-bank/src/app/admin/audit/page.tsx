@@ -1,0 +1,3 @@
+import { AuditLog } from "@/lib/models";
+import { requireAdmin } from "@/lib/auth";
+export default async function AuditPage(){await requireAdmin();const logs=await AuditLog.find().sort({createdAt:-1}).limit(100).lean();return <><span className="eyebrow">Administration</span><h1 className="text-3xl font-bold mt-1">Audit Events</h1><div className="card table-wrap mt-7"><table className="data-table"><thead><tr><th>Date</th><th>Action</th><th>Actor</th><th>Entity</th></tr></thead><tbody>{logs.length?logs.map(l=><tr key={String(l._id)}><td>{new Date(l.createdAt).toLocaleString()}</td><td>{l.action}</td><td>{String(l.actorId||"System")}</td><td>{String(l.entityId||"—")}</td></tr>):<tr><td colSpan={4} className="muted">No audit events.</td></tr>}</tbody></table></div></>}

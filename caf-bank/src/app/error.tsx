@@ -1,0 +1,2 @@
+"use client";
+export default function ErrorPage({ reset }: { error: Error & { digest?: string }; reset: () => void }) { return <main className="min-h-screen flex items-center justify-center p-6"><div className="card p-10 max-w-md text-center"><span className="eyebrow">Something went wrong</span><h1 className="text-3xl font-bold mt-3">We couldn&apos;t complete that request.</h1><p className="muted mt-3">Please try again. If it keeps happening, contact support.</p><button className="btn mt-6" onClick={reset}>Try again</button></div></main>; }
