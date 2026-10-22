@@ -134,8 +134,6 @@
     "helpBody": "Inicia sesión y abre Soporte para comenzar una conversación.",
     "helpButton": "Iniciar sesión para soporte",
     "faqTitle": "Preguntas frecuentes",
-    "qReal": "¿Es un banco real?",
-    "aReal": "No. Es una simulación bancaria para un curso de software.",
     "qVerify": "¿Cómo verifico mi cuenta?",
     "aVerify": "Regístrate, verifica el código del correo y sube un documento de identidad.",
     "qTransfers": "¿Cómo funcionan las transferencias?",

@@ -134,8 +134,6 @@
     "helpBody": "Sign in and open Support from your dashboard to start a conversation.",
     "helpButton": "Sign in for support",
     "faqTitle": "Common questions",
-    "qReal": "Is this a real bank?",
-    "aReal": "No. This is an isolated banking simulation for a software course project.",
     "qVerify": "How do I verify my account?",
     "aVerify": "Register, verify your email code, then upload an identity document for review.",
     "qTransfers": "How do transfers work?",

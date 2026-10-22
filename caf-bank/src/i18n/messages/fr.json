@@ -134,8 +134,6 @@
     "helpBody": "Connectez-vous et ouvrez l’assistance pour démarrer une conversation.",
     "helpButton": "Connexion à l’assistance",
     "faqTitle": "Questions fréquentes",
-    "qReal": "Est-ce une vraie banque ?",
-    "aReal": "Non. C’est une simulation bancaire pour un projet de cours.",
     "qVerify": "Comment vérifier mon compte ?",
     "aVerify": "Inscrivez-vous, vérifiez le code reçu par e-mail puis téléversez une pièce d’identité.",
     "qTransfers": "Comment fonctionnent les virements ?",
