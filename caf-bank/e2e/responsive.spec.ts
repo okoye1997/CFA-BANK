@@ -9,6 +9,7 @@ for (const width of [320, 375, 768, 1366, 1920]) {
       await expect(page.locator("html")).toHaveAttribute("lang", "en");
       const size = await page.evaluate(() => ({ viewport: innerWidth, page: document.documentElement.scrollWidth }));
       expect(size.page, `${path} overflows at ${width}px`).toBeLessThanOrEqual(size.viewport);
+      if (path === "/") await page.getByRole("button", { name: "Open menu" }).click();
       await expect(page.getByRole("combobox", { name: "Language" })).toBeVisible();
     }
     await context.close();
