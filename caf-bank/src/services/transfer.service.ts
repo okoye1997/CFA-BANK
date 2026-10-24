@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
-import { randomInt, randomUUID } from "crypto";
+import { randomInt } from "crypto";
 import { Account, AdminTransactionChallenge, AuditLog, Beneficiary, LedgerEntry, Transaction, TransactionAuthorization, User } from "@/lib/models";
 import { AppError } from "@/lib/http";
 import { formatMoney } from "@/lib/money";
@@ -9,6 +9,7 @@ import { transferSchema, pinSchema } from "@/lib/validation";
 import { deliverEmailJob, sendSecretCodeEmail } from "@/lib/email/send-email";
 import { audit } from "./audit.service";
 import { broadcastNotification, queueNotification } from "./notification.service";
+import { uniqueReference } from "./identifier.service";
 
 export async function setTransactionPin(userId: string, pin: string) {
   pinSchema.parse(pin);
@@ -26,7 +27,7 @@ export async function createTransfer(userId: string, input: unknown) {
   if (account.availableBalance < amount) throw new AppError("Insufficient available balance.", 422);
   const beneficiary = await Beneficiary.findOne({ _id: data.beneficiaryId, userId });
   if (!beneficiary) throw new AppError("Select your beneficiary.", 403);
-  const transaction = await Transaction.create({ userId, accountId: account._id, beneficiaryId: beneficiary._id, recipientName: beneficiary.name, recipientBankName: beneficiary.bankName, amount, currency: "USD", reference: `CAF-${randomUUID().slice(0, 12).toUpperCase()}`, description: data.description, status: "AWAITING_TRANSACTION_PIN" });
+  const transaction = await Transaction.create({ userId, accountId: account._id, beneficiaryId: beneficiary._id, recipientName: beneficiary.name, recipientBankName: beneficiary.bankName, amount, currency: "USD", reference: await uniqueReference("TXN"), description: data.description, status: "AWAITING_TRANSACTION_PIN", statusHistory: [{ status: "AWAITING_TRANSACTION_PIN", changedAt: new Date(), changedBy: userId, note: "Transaction created" }] });
   await audit("TRANSACTION_CREATION", userId, String(transaction._id));
   return transaction;
 }
@@ -43,7 +44,7 @@ export async function authorizeCustomer(userId: string, transactionId: string, p
     throw new AppError("Incorrect transaction PIN.", 403);
   }
   user.pinFailures = 0; user.pinLockedUntil = undefined; await user.save();
-  const transaction = await Transaction.findOneAndUpdate({ _id: transactionId, userId, status: "AWAITING_TRANSACTION_PIN" }, { $set: { status: "AWAITING_ADMIN_AUTHORIZATION" } }, { returnDocument: "after" });
+  const transaction = await Transaction.findOneAndUpdate({ _id: transactionId, userId, status: "AWAITING_TRANSACTION_PIN" }, { $set: { status: "AWAITING_ADMIN_AUTHORIZATION" }, $push: { statusHistory: { status: "AWAITING_ADMIN_AUTHORIZATION", changedAt: new Date(), changedBy: userId, note: "Customer PIN verified" } } }, { returnDocument: "after" });
   if (!transaction) throw new AppError("Transaction is not awaiting PIN authorization.", 409);
   await TransactionAuthorization.updateOne({ transactionId }, { $set: { customerAuthorizedAt: new Date() } }, { upsert: true });
   const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
@@ -80,7 +81,7 @@ export async function authorizeAdmin(adminId: string, transactionId: string, cod
       if (!await Beneficiary.exists({ _id: current.beneficiaryId, userId: current.userId }).session(session)) throw new AppError("Recipient is no longer available.", 422);
       await LedgerEntry.create([{ userId: current.userId, accountId: account._id, transactionId: current._id, operationKey: `TRANSFER_DEBIT:${transactionId}`, type: "TRANSFER_DEBIT", amount: -current.amount, status: "COMPLETED" }], { session, ordered: true });
       await Account.updateOne({ _id: account._id }, { $inc: { availableBalance: -current.amount, ledgerBalance: -current.amount } }, { session });
-      await Transaction.updateOne({ _id: current._id }, { $set: { status: "PENDING", pendingAt: new Date() } }, { session });
+      await Transaction.updateOne({ _id: current._id }, { $set: { status: "PENDING", pendingAt: new Date() }, $push: { statusHistory: { status: "PENDING", changedAt: new Date(), changedBy: adminId, note: "Admin authorization completed" } } }, { session });
       await TransactionAuthorization.updateOne({ transactionId }, { $set: { adminAuthorizedAt: new Date() } }, { session });
       await AdminTransactionChallenge.updateOne({ _id: challenge._id, usedAt: null }, { $set: { usedAt: new Date() } }, { session });
       const body = `Your transaction has been accepted and is currently pending processing.\nAmount: ${formatMoney(current.amount, "USD")}\nReference: ${current.reference}\nDate: ${new Date().toISOString()}\nStatus: Pending`;

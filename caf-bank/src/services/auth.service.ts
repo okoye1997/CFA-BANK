@@ -10,6 +10,7 @@ import { deliverEmailJob } from "@/lib/email/send-email";
 import { applicationName, applicationUrl } from "@/lib/app-config";
 import { audit } from "./audit.service";
 import { broadcastNotification, queueNotification } from "./notification.service";
+import { createNumberedAccount } from "./identifier.service";
 
 const verificationMinutes = 10;
 
@@ -20,10 +21,8 @@ export async function register(input: unknown, preferredLocale?: string) {
   const passwordHash = await bcrypt.hash(data.password, 12);
   const user = await User.create({ ...data, password: undefined, passwordHash, preferredLocale });
   try {
-    await Account.create([
-      { userId: user._id, name: "Cash Account", currency: "USD", availableBalance: 0, ledgerBalance: 0 },
-      { userId: user._id, name: "Gold Account", currency: "GBP", availableBalance: 0, ledgerBalance: 0 },
-    ]);
+    await createNumberedAccount(String(user._id), "Cash Account", "USD");
+    await createNumberedAccount(String(user._id), "Gold Account", "GBP");
     await issueVerificationCode(user);
     await queueNotification({ userId: String(user._id), type: "VERIFICATION_REQUIRED", subject: "Email verification required", body: "Check your email for a verification link or code to secure your account.", href: "/verify-email", email: false });
     broadcastNotification(String(user._id));

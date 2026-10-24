@@ -7,3 +7,6 @@
 [dir="rtl"] input[type="email"],[dir="rtl"] input[inputmode="numeric"]{direction:ltr;text-align:right}
 .card{overflow-wrap:anywhere}
 @media(max-width:359px){.brand{font-size:1.18rem}.brand-mark{width:30px;height:30px}}
+.mobile-navigation{padding-left:max(1rem,env(safe-area-inset-left));padding-right:max(1rem,env(safe-area-inset-right))}
+:is(a,button,summary,select,input,textarea):focus-visible{outline:2px solid #0755b8;outline-offset:2px}
+.mobile-navigation :is(a,summary):focus-visible{outline-color:white}

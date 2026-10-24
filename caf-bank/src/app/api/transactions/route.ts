@@ -10,6 +10,6 @@ export async function GET(request: Request) { try {
   if (q.get("search")) { const safe = q.get("search")!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); filter.$or = [{ reference: { $regex: safe, $options: "i" } }, { description: { $regex: safe, $options: "i" } }]; }
   if (q.get("from") || q.get("to")) filter.createdAt = { ...(q.get("from") ? { $gte: new Date(q.get("from")!) } : {}), ...(q.get("to") ? { $lte: new Date(`${q.get("to")}T23:59:59.999Z`) } : {}) };
   const page = Math.max(1, Number(q.get("page")) || 1), limit = 20;
-  const [items, total] = await Promise.all([Transaction.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(), Transaction.countDocuments(filter)]);
+  const [items, total] = await Promise.all([Transaction.find(filter).select("-adminNotes -declineReason -approvedBy -declinedBy -statusHistory.changedBy").sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(), Transaction.countDocuments(filter)]);
   return NextResponse.json({ items, total, page, pages: Math.ceil(total / limit) });
 } catch (error) { return respondError(error); } }

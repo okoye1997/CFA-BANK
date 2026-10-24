@@ -82,6 +82,7 @@ Run all commands below from **`caf-bank/`**, the sole Node package and deploymen
 | `SMTP_SECURE` | Set to `true` when the SMTP connection uses implicit TLS; otherwise `false`. |
 | `SMTP_USER`, `SMTP_PASSWORD` | SMTP authentication, if required by the provider. |
 | `ADMIN_APPROVAL_EMAIL` | Address that receives the admin transfer-authorization code. |
+| `USD_GBP_RATE` | Approved GBP value of 1 USD for Cash/Gold internal transfers. Required to enable conversion; the server rejects transfers when it is missing or invalid. |
 | `CRON_SECRET` | Bearer secret protecting the scheduled job routes. Also enables the custom server's built-in timers. |
 | `PORT` | Optional listening port; defaults to `3000`. |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Supplied only when running `npm run admin:create`; do not put them in source control. |
@@ -98,6 +99,16 @@ Use the same origin for `APP_URL`, `AUTH_URL`, and `NEXTAUTH_URL` in a normal de
 6. **Completion alert:** when a trusted settlement process records `COMPLETED` (and ideally `completedAt`), the protected email job finds the record and creates one persistent in-app notice and one email job using stored transaction and recipient data. The worker never marks a pending transfer complete.
 
 The app does not connect to a payment rail. Identity approval and transfer completion must not be mistaken for external bank verification or settlement.
+
+## Transaction management extension
+
+New registrations receive distinct random account numbers for Cash and Gold accounts. Existing accounts created before this extension retain their balances and may have no account number; assign numbers in a controlled data migration before expecting them on all legacy account screens. The account-number index is sparse so existing documents remain valid.
+
+Customers can transfer between their own active Cash and Gold accounts at `/dashboard/accounts/transfer`. The server computes the conversion using `USD_GBP_RATE`, quotes a zero fee, verifies funds, and commits the debit, credit, ledger entries, receipt, audit record, and notification in a MongoDB transaction. Retries with the same idempotency key return the original transaction.
+
+Admins can search and review transactions at `/admin/transactions`, add private notes, move eligible pending transactions through review and approval states, and decline them with a customer explanation. A declined or failed transaction with an existing debit receives an atomic reversal. The original email-code authorization path still applies before an external transfer can enter this review flow. Marking an external transfer `COMPLETED` records a simulated settlement decision; it does not call a payment network.
+
+Transaction detail pages show status history. Receipts are available as branded, printable HTML with a browser Save as PDF action. Only the owner or an admin can open a receipt. Customer transaction APIs omit private admin notes and reasons.
 
 ## Jobs and email delivery
 

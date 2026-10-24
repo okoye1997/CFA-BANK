@@ -4,12 +4,14 @@ import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import nodemailer from "nodemailer";
 import { MongoMemoryReplSet } from "mongodb-memory-server";
-import { Account, AdminTransactionChallenge, Beneficiary, EmailJob, EmailVerificationChallenge, LedgerEntry, Message, Notification, Transaction, TransactionAuthorization, User } from "@/lib/models";
+import { Account, AdminTransactionChallenge, Beneficiary, EmailJob, EmailVerificationChallenge, LedgerEntry, Message, Notification, Receipt, Transaction, TransactionAuthorization, User } from "@/lib/models";
 import { connectMongo } from "@/lib/mongodb";
 import { activateVerifiedAccount } from "./account.service";
 import { authorizeAdmin, authorizeCustomer, createTransfer, setTransactionPin } from "./transfer.service";
 import { register, verifyEmail } from "./auth.service";
 import { processCompletedTransferNotifications, sendPendingFollowups } from "./transaction.service";
+import { internalTransfer } from "./internal-transfer.service";
+import { changeTransactionStatus } from "./transaction-workflow.service";
 
 describe.runIf(process.env.RUN_MONGO_INTEGRATION === "1")("banking transactions against MongoDB", () => {
   let database: MongoMemoryReplSet;
@@ -20,6 +22,43 @@ describe.runIf(process.env.RUN_MONGO_INTEGRATION === "1")("banking transactions 
     await Promise.all([User.init(), Account.init(), LedgerEntry.init(), Transaction.init(), TransactionAuthorization.init(), AdminTransactionChallenge.init()]);
   }, 180_000);
   afterAll(async () => { vi.restoreAllMocks(); await mongoose.disconnect(); if (database) await database.stop(); });
+
+  it("posts an internal transfer atomically once with ledger, receipt and notice", async () => {
+    process.env.USD_GBP_RATE = "0.8";
+    const user = await User.create({ surname: "Transfer", firstName: "Internal", email: `internal-${Date.now()}@example.test`, passwordHash: "not-a-login", emailVerified: true, identityVerified: true });
+    const [cash, gold] = await Account.create([{ userId: user._id, accountNumber: "1234567890000001", name: "Cash Account", currency: "USD", status: "ACTIVE", availableBalance: 100000, ledgerBalance: 100000 }, { userId: user._id, accountNumber: "1234567890000002", name: "Gold Account", currency: "GBP", status: "ACTIVE", availableBalance: 0, ledgerBalance: 0 }]);
+    const key = "1a290fed-66b1-4f7a-8d79-0e2b2976b538";
+    const first = await internalTransfer(String(user._id), { sourceAccountId: String(cash._id), destinationAccountId: String(gold._id), amount: "100.00", idempotencyKey: key });
+    const repeated = await internalTransfer(String(user._id), { sourceAccountId: String(cash._id), destinationAccountId: String(gold._id), amount: "100.00", idempotencyKey: key });
+    expect(String(repeated._id)).toBe(String(first._id));
+    expect((await Account.findById(cash._id)).availableBalance).toBe(90000);
+    expect((await Account.findById(gold._id)).availableBalance).toBe(8000);
+    expect(await LedgerEntry.countDocuments({ transactionId: first._id })).toBe(2);
+    expect(await Receipt.countDocuments({ transactionId: first._id })).toBe(1);
+    expect(await Notification.countDocuments({ userId: user._id, type: "TRANSACTION_COMPLETED" })).toBe(1);
+    await expect(internalTransfer(String(user._id), { sourceAccountId: String(gold._id), destinationAccountId: String(cash._id), amount: "100.00", idempotencyKey: "c8c6dd20-1b37-494b-b76b-a881e63d7e8b" })).rejects.toThrow(/sufficient/);
+    expect((await Account.findById(gold._id)).availableBalance).toBe(8000);
+    await expect(changeTransactionStatus(String(user._id), String(first._id), "PENDING")).rejects.toThrow(/Invalid transaction state/);
+    delete process.env.USD_GBP_RATE;
+  });
+
+  it("records admin review and refunds a declined pending debit once", async () => {
+    const user = await User.create({ surname: "Review", firstName: "Customer", email: `review-${Date.now()}@example.test`, passwordHash: "not-a-login", emailVerified: true, identityVerified: true });
+    const admin = await User.create({ surname: "Review", firstName: "Admin", email: `review-admin-${Date.now()}@example.test`, passwordHash: "not-a-login", role: "ADMIN" });
+    const cash = await Account.create({ userId: user._id, name: "Cash Account", currency: "USD", status: "ACTIVE", availableBalance: 90000, ledgerBalance: 90000 });
+    const transaction = await Transaction.create({ userId: user._id, accountId: cash._id, reference: `TEST-${Date.now()}`, amount: 10000, currency: "USD", status: "PENDING", recipientName: "External", type: "EXTERNAL_TRANSFER", statusHistory: [{ status: "PENDING", changedAt: new Date(), changedBy: admin._id }] });
+    await LedgerEntry.create({ userId: user._id, accountId: cash._id, transactionId: transaction._id, operationKey: `TRANSFER_DEBIT:${transaction._id}`, type: "TRANSFER_DEBIT", amount: -10000, status: "COMPLETED" });
+    await changeTransactionStatus(String(admin._id), String(transaction._id), "UNDER_REVIEW", "Checking transfer");
+    await expect(changeTransactionStatus(String(admin._id), String(transaction._id), "COMPLETED")).rejects.toThrow(/Invalid transaction state/);
+    await expect(changeTransactionStatus(String(admin._id), String(transaction._id), "DECLINED")).rejects.toThrow(/reason/i);
+    await changeTransactionStatus(String(admin._id), String(transaction._id), "DECLINED", "Internal compliance review", "We could not authorize this transfer.");
+    expect((await Account.findById(cash._id)).availableBalance).toBe(100000);
+    expect(await LedgerEntry.countDocuments({ transactionId: transaction._id, type: "REVERSAL" })).toBe(1);
+    expect((await Transaction.findById(transaction._id)).statusHistory).toHaveLength(3);
+    expect((await Receipt.findOne({ transactionId: transaction._id })).status).toBe("DECLINED");
+    await expect(changeTransactionStatus(String(admin._id), String(transaction._id), "COMPLETED")).rejects.toThrow(/Invalid transaction state/);
+    expect(await Notification.countDocuments({ userId: user._id, type: "TRANSACTION_DECLINED" })).toBe(1);
+  });
 
   it("creates zero-balance accounts and verifies an emailed one-time code without storing it", async () => {
     const sent: { text?: string }[] = [];
